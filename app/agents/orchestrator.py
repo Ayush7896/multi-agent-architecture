@@ -19,13 +19,29 @@ def orchestrator_agent(state: PlannerState):
     messages = orchestrator_prompt.format_messages(
       user_input = state["user_input"]
     )
-    response = structured_model.invoke(messages)
+    # adding retries logic
+    for attempt in range(3):
+        try:
+            response = structured_model.invoke(messages)
+            if response.next_agent not in ["planner","end"]:
+                raise ValueError("Invalid agent")
+            return {
+            "current_thought": response.thought,
+            "plan": response.plan,
+            "next_agent": response.next_agent
+            }
+        except Exception as e:
+            print(f"Retry {attempt + 1} failed:",e)
 
     return {
-        "current_thought": response.thought,
-        "plan": response.plan,
-        "next_agent": response.next_agent
+        "next_agent": "end",
+        "final_answer": "Failed after retries"
     }
+            
+
+
+
+   
 
 
 graph = StateGraph(PlannerState)
