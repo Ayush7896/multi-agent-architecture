@@ -49,7 +49,16 @@ def planner_agent(state: PlannerState):
     # Current request — the orchestrator's plan, not raw user_input
     # The orchestrator already distilled user_input into structured plan steps
     messages.append(
-        HumanMessage(content="\n".join(state["plan"]))
+    HumanMessage(content=f"""
+        Plan to execute:
+        {chr(10).join(state["plan"])}
+
+        Research findings (real current data from internet):
+        {state.get("research_findings", "No research data available.")}
+
+        Create a detailed, accurate itinerary using the research above.
+        Reference specific names, prices, and details from the research.
+        """)
     )
 
     structured_model = model.with_structured_output(PlannerOutput)

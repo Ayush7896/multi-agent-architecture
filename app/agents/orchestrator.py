@@ -4,11 +4,12 @@ from db.database import load_chat_history
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from agents.schemas import PlannerState, OrchestratorOutput
 from agents.model import model
-from langchain_core.prompts import ChatPromptTemplate
+from agents.researcher import researcher_agent
 from agents.planner import planner_agent
 from dotenv import load_dotenv
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg_pool import AsyncConnectionPool
+
 
 load_dotenv()
 
@@ -63,10 +64,16 @@ def orchestrator_agent(state: PlannerState):
 
     messages = [
         SystemMessage(content="""
-            You are an advanced orchestrator.
-            You analyze user requests and decide which specialized agent handles them.
-            You are aware of the conversation history provided.
-            Use it to understand follow-up requests and running context.
+            You are an advanced orchestrator. Decide which agent handles the request.
+
+            Routes:
+            - "researcher" → user needs current facts (hotels, prices, attractions,
+                            weather, events, anything that changes over time)
+            - "planner"    → user asks for a structured plan using known information
+            - "end"        → greeting, off-topic, or cannot be answered
+
+            When in doubt between researcher and planner, always choose researcher.
+            Real data produces better answers than the LLM's training knowledge.
         """)
     ]
 
@@ -105,6 +112,7 @@ def orchestrator_agent(state: PlannerState):
 graph = StateGraph(PlannerState)
 graph.add_node("orchestrator",orchestrator_agent)
 graph.add_node("planner",planner_agent)
+graph.add_node("researcher",researcher_agent)
 
 def route(state:PlannerState):
     return state["next_agent"]
@@ -113,9 +121,19 @@ graph.add_edge(START, "orchestrator")
 graph.add_conditional_edges(
     "orchestrator",
     route,
-    {
+    {    
+        "researcher": "researcher",
         "planner":"planner",
         "end": END
+    }
+)
+# After researcher, route() runs again — researcher set next_agent="planner"
+graph.add_conditional_edges(
+    "researcher",
+    route,
+    {
+        "planner": "planner",
+        "end":     END
     }
 )
 graph.add_edge("planner",END)

@@ -13,11 +13,12 @@ class PlannerState(TypedDict):
     current_thought: str
     plan: Annotated[list[str], operator.add]
     next_agent: str
+    research_findings: str    # New: researcher writes here, planner reads
     final_answer: str
 
 class OrchestratorOutput(BaseModel):
     thought: str
-    next_agent: Literal["planner","end"]
+    next_agent: Literal["researcher","planner","end"]   # researcher added
     plan: List[str]
 
 class PlannerOutput(BaseModel):
