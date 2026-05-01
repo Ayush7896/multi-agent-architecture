@@ -38,12 +38,6 @@ def orchestrator_agent(state: PlannerState):
         "final_answer": "Failed after retries"
     }
             
-
-
-
-   
-
-
 graph = StateGraph(PlannerState)
 graph.add_node("orchestrator",orchestrator_agent)
 graph.add_node("planner",planner_agent)
@@ -61,7 +55,4 @@ graph.add_conditional_edges(
     }
 )
 graph.add_edge("planner",END)
-
-
 workflow = graph.compile()
-
