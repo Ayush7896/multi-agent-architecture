@@ -1,0 +1,7 @@
+# Streamlit frontend dependencies — intentionally minimal.
+# WHY separate from root requirements.txt?
+# The FastAPI image doesn't need streamlit. The Streamlit image doesn't need
+# langchain, psycopg2, or langgraph. Smaller image = faster builds + less attack surface.
+
+streamlit==1.49.0
+requests==2.33.1

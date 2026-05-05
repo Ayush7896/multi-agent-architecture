@@ -1,0 +1,187 @@
+# Navigate to your app folder
+cd app
+
+# Build the image
+# -t = tag (name you give the image)
+# . = build context (current folder, where Dockerfile is)
+docker build -t travel-api:local .
+
+# You will see each layer building. Watch the cache messages on rebuild.
+# First build: slow (downloading, installing).
+# Second build (no code change): fast (all layers cached).
+# Second build (only code change): pip install is cached, only COPY . . reruns.
+
+# Run it
+# -p 8000:8000 = forward port: host_port:container_port
+# --env-file .env = pass your environment variables from .env file
+docker run -p 8000:8000 --env-file .env travel-api:local
+
+# Open browser: http://localhost:8000/health
+# You should see {"status": "ok"}
+# This is running INSIDE a container, not directly on your machine.
+
+
+
+docker-compose.yam file
+# docker-compose.yml — root of project
+# Run with: docker compose up --build
+# Stop with: docker compose down
+version: "3.9"
+
+# → which docker-compose format to use
+# → 3.9 = current stable version
+# → affects which features are available
+
+services:
+  postgres:
+    image: postgres:16-alpine
+
+# services:
+#   → the list of containers you want to run together
+
+# postgres:
+#   → the NAME you give this service
+#   → OTHER services can reach this one by typing "postgres" as a hostname
+#   → this name becomes DNS inside the Docker network
+
+# image: postgres:16-alpine
+#   → use this pre-built image from DockerHub
+#   → alpine = extra-small Linux variant (50MB vs 200MB for regular)
+#   → NO Dockerfile needed — you're using someone else's ready-made image
+
+environment:
+      POSTGRES_DB:       travel_planner
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+
+# environment:
+#   → inject these as environment variables into the container
+#   → postgres:16-alpine image reads these to create the database on first start
+
+# ${DB_PASSWORD}
+#   → reads DB_PASSWORD from your .env file
+#   → docker compose automatically reads .env file in the same directory
+#   → you NEVER hardcode passwords in docker-compose.yml
+#   → if you commit this file: no secrets exposed (value is in .env, which is gitignored)
+volumes:
+    - postgres_data:/var/lib/postgresql/data
+
+
+# volumes:
+#   → mount storage into the container
+
+# postgres_data:/var/lib/postgresql/data
+#   → left side (postgres_data) = named volume managed by Docker
+#   → right side = where PostgreSQL stores its data files inside the container
+
+# WHY needed?
+#   Containers are ephemeral — when stopped, all data inside is GONE.
+#   Without volume: every docker compose down = empty database. Bad.
+#   With volume: data survives container restarts. Named volume persists.
+
+healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+# healthcheck:
+#   → Docker periodically runs this command to check if postgres is READY
+#   → not just started — actually accepting connections
+
+# pg_isready -U postgres = postgres's own tool that returns 0 if ready, 1 if not
+
+# interval: 5s  → check every 5 seconds
+# retries: 5    → try 5 times before marking as unhealthy
+
+# WHY needed?
+#   FastAPI's depends_on uses this.
+#   Without healthcheck: FastAPI starts before postgres is ready = DB connection error.
+#   With healthcheck: FastAPI waits until postgres is truly ready before starting.
+
+
+fastapi:
+  build:
+    context: .
+    dockerfile: app/Dockerfile
+  ports:
+    - "8000:8000"
+  environment:
+    DB_HOST: postgres
+    DB_PORT: "5432"
+    DB_NAME: travel_planner
+    DB_PASSWORD: ${DB_PASSWORD}
+    OPENAI_API_KEY: ${OPENAI_API_KEY}
+    TAVILY_API_KEY: ${TAVILY_API_KEY}
+  depends_on:
+    postgres:
+      condition: service_healthy
+  restart: unless-stopped
+
+# build:
+#   context: .            → Docker build context = current directory (root of project)
+#   dockerfile: app/Dockerfile  → path to Dockerfile from context root
+
+# ports: "8000:8000"
+#   → "host_port:container_port"
+#   → YOUR machine port 8000 → container's port 8000
+#   → open browser at localhost:8000 = reaches FastAPI inside container
+
+# DB_HOST: postgres
+#   → THIS is the Docker DNS magic
+#   → "postgres" = the service name above
+#   → Docker's internal DNS resolves "postgres" → IP of postgres container
+#   → No hardcoded IPs, no localhost (that would be the fastapi container itself)
+
+# depends_on:
+#   postgres:
+#     condition: service_healthy
+#   → "don't start fastapi until postgres healthcheck passes"
+#   → requires healthcheck to be defined on postgres (we did this above)
+
+# restart: unless-stopped
+#   → if FastAPI crashes, Docker restarts it automatically
+#   → unless-stopped = restart on crash but NOT if you manually stop it
+
+streamlit:
+  build:
+    context: .
+    dockerfile: frontend/Dockerfile.streamlit
+  ports:
+    - "8501:8501"
+  environment:
+    FASTAPI_URL: http://fastapi:8000
+  depends_on:
+    - fastapi
+
+volumes:
+  postgres_data:
+
+# FASTAPI_URL: http://fastapi:8000
+#   → streamlit container calls "http://fastapi:8000"
+#   → "fastapi" = service name = Docker DNS resolves it
+#   → this is why in your streamlit_app.py you read:
+#     FASTAPI_URL = os.getenv("FASTAPI_URL", "http://localhost:8000")
+#   → locally: localhost:8000 (no compose)
+#   → in compose: http://fastapi:8000 (Docker DNS)
+
+# volumes:
+#   postgres_data:
+#   → DECLARE the named volume at the bottom
+#   → docker compose creates and manages this volume
+#   → without this declaration: the volume reference above would fail
+
+
+
+How to run docker compose
+docker compose up --build
+# --build = rebuild images even if they exist (use when code changed)
+
+# Visit:
+# http://localhost:8501 = Streamlit
+# http://localhost:8000/docs = FastAPI swagger
+
+docker compose down          # stop all, keep volumes
+docker compose down -v       # stop all, DELETE volumes (fresh DB)
+docker compose logs fastapi  # see only fastapi logs
+docker compose ps            # see status of all services

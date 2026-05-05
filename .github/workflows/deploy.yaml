@@ -1,0 +1,58 @@
+# .github/workflows/deploy.yaml
+# PURPOSE: Deploy to Railway after CI passes
+# RUNS ON: only when "Build and Push Docker Image" workflow completes successfully
+# WHY separate file? Separation of concerns.
+#   ci.yaml = validate and package the code
+#   deploy.yaml = ship the package to production
+
+name: Deploy to Railway
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker Image"]
+    # ^ MUST match the exact name: field in ci.yaml
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    # Only deploy if ci.yaml actually PASSED
+    # workflow_run fires even on failure — this check prevents deploying broken code
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Confirm what we are deploying
+        run: |
+          echo "CI workflow status: ${{ github.event.workflow_run.conclusion }}"
+          echo "Triggered by commit: ${{ github.event.workflow_run.head_sha }}"
+          echo "Branch: ${{ github.event.workflow_run.head_branch }}"
+          # These echo statements appear in your GitHub Actions logs
+          # Useful for debugging which commit triggered this deploy
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+        # npm is pre-installed on GitHub's Ubuntu runner
+        # This installs the railway command globally
+
+      - name: Deploy FastAPI to Railway
+        run: railway redeploy --service travel-api --yes
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          # --yes = skip confirmation prompt (needed for non-interactive CI)
+          # railway CLI reads RAILWAY_TOKEN automatically from env
+
+      - name: Deploy Streamlit to Railway
+        run: railway redeploy --service travel-streamlit --yes
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+      - name: Deployment summary
+        run: |
+          echo "✅ Deployment complete"
+          echo "FastAPI: https://travel-api.railway.app"
+          echo "Streamlit: https://travel-streamlit.railway.app"

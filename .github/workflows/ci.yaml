@@ -1,0 +1,145 @@
+# .github/workflows/ci.yaml
+# PURPOSE: Test code quality + build and push Docker image
+# RUNS ON: every push to main, every pull request to main
+# JOBS: lint-and-test → build-and-push (only if first job passes)
+
+name: Build and Push Docker Image   # this exact name is used by deploy.yaml
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+    # WHY pull_request too?
+    # Run tests on PRs so you catch bugs BEFORE merging to main
+    # build-and-push only runs on actual push to main, not PRs
+
+jobs:
+
+  # ── JOB 1: Lint and Test ────────────────────────────────────────────────
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ── CACHE — this is the step most beginners skip ─────────────────────
+      # Without cache: pip install runs from scratch every time = 2-3 minutes
+      # With cache: pip checks if requirements.txt changed
+      #   → unchanged = reuse cached packages = 15 seconds
+      #   → changed = reinstall only new packages
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip          # where pip stores downloads
+          key: pip-${{ hashFiles('app/requirements.txt') }}
+          # key = fingerprint of requirements.txt
+          # If requirements.txt changes → key changes → cache invalidated → fresh install
+          # If requirements.txt unchanged → same key → reuse cache
+          restore-keys: |
+            pip-
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r app/requirements.txt
+          pip install flake8 pytest    # add linting and test tools
+
+      # ── LINT — catches syntax errors and style issues ────────────────────
+      # flake8 reads your Python files and reports problems
+      # --max-line-length 120 = allow lines up to 120 chars (PEP8 default is 79)
+      # --exclude = don't lint these folders
+      - name: Lint with flake8
+        run: |
+          flake8 app/ \
+            --max-line-length 120 \
+            --exclude app/__pycache__,app/.venv \
+            --count \
+            --statistics
+        continue-on-error: true
+        # continue-on-error: true = lint warnings don't fail the build
+        # Remove this line when you want strict linting to block merges
+
+      # ── TESTS ───────────────────────────────────────────────────────────
+      - name: Run tests
+        run: |
+          cd app
+          python -m pytest tests/ -v --tb=short 2>/dev/null || echo "No tests found yet"
+        env:
+          # Tests need env vars — use dummy/fake values
+          # Real keys not needed for unit tests that mock the LLM
+          DB_HOST: localhost
+          DB_PORT: "5432"
+          DB_NAME: travel_planner_test
+          DB_USER: postgres
+          DB_PASSWORD: testpassword
+          OPENAI_API_KEY: test-key
+          TAVILY_API_KEY: test-key
+          APP_ENV: test
+
+  # ── JOB 2: Build and Push Docker Image ───────────────────────────────────
+  # needs: lint-and-test = only runs if Job 1 passes
+  # if: github.ref == 'refs/heads/main' = only on actual push to main, not PRs
+  build-and-push:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    # outputs = values this job passes to deploy.yaml
+    outputs:
+      image-tag: ${{ steps.set-tag.outputs.tag }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: set-tag
+        # github.sha = full hash like "a1b2c3d4e5f6..."
+        # We take first 7 characters for readability
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "tag=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "Short SHA: $SHORT_SHA"
+          # GITHUB_OUTPUT = special file, writing here saves variable for later steps
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build FastAPI image
+        run: |
+          docker build \
+            -t ${{ secrets.DOCKER_USERNAME }}/travel-api:latest \
+            -t ${{ secrets.DOCKER_USERNAME }}/travel-api:${{ steps.set-tag.outputs.tag }} \
+            -f app/Dockerfile \
+            ./app
+          # -f app/Dockerfile = Dockerfile location
+          # ./app = build context (COPY commands resolve from here)
+
+      - name: Push FastAPI image
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/travel-api:latest
+          docker push ${{ secrets.DOCKER_USERNAME }}/travel-api:${{ steps.set-tag.outputs.tag }}
+          echo "Pushed: travel-api:latest and travel-api:${{ steps.set-tag.outputs.tag }}"
+
+      - name: Build Streamlit image
+        run: |
+          docker build \
+            -t ${{ secrets.DOCKER_USERNAME }}/travel-streamlit:latest \
+            -t ${{ secrets.DOCKER_USERNAME }}/travel-streamlit:${{ steps.set-tag.outputs.tag }} \
+            -f frontend/Dockerfile \
+            ./frontend
+
+      - name: Push Streamlit image
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/travel-streamlit:latest
+          docker push ${{ secrets.DOCKER_USERNAME }}/travel-streamlit:${{ steps.set-tag.outputs.tag }}

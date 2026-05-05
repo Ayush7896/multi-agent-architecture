@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────
+# WHY a separate Dockerfile for Streamlit?
+# FastAPI and Streamlit are two different programs with different deps.
+# One Dockerfile = one image = one service. Keep them isolated.
+#
+# python:3.12-slim = 130MB base (vs 1GB full). Always use slim for services.
+
+FROM python:3.12-slim
+
+# ─────────────────────────────────────────────
+# WORKDIR — all following commands run from /app inside the container.
+
+WORKDIR /app
+
+# ─────────────────────────────────────────────
+# COPY requirements FIRST — before copying code.
+# WHY? Docker caches each layer. If requirements haven't changed,
+# Docker reuses the cached pip install layer → saves 2-3 min per build.
+
+COPY frontend/requirements-streamlit.txt .
+
+# ─────────────────────────────────────────────
+# pip install — install only what Streamlit needs (not langchain, psycopg2, etc.)
+# --no-cache-dir = don't store pip download cache in the image (saves ~50MB).
+
+RUN pip install --no-cache-dir -r requirements-streamlit.txt
+
+# ─────────────────────────────────────────────
+# COPY only the frontend folder — not the entire project.
+# WHY? The container only needs Streamlit files. No reason to copy app/ or .env.
+# frontend/ → /app/ (so streamlit_app.py lands at /app/streamlit_app.py)
+
+COPY frontend/ .
+
+# ─────────────────────────────────────────────
+# EXPOSE 8501 — Streamlit's default port.
+# Documents the port; actual publishing happens in docker-compose.yaml.
+
+EXPOSE 8501
+
+# ─────────────────────────────────────────────
+# CMD — start Streamlit when the container launches.
+# --server.address=0.0.0.0 = listen on ALL interfaces (required inside Docker).
+# Without 0.0.0.0: Streamlit only accepts connections from inside the container.
+# --server.headless=true = don't try to open a browser (no display in Docker).
+
+CMD ["streamlit", "run", "streamlit_app.py",\
+     "--server.address=0.0.0.0",\
+     "--server.port=8501",\
+     "--server.headless=true"]

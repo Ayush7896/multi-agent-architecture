@@ -1,0 +1,39 @@
+# .dockerignore — tells Docker what NOT to copy into the image.
+# WHY it matters: COPY . . would include .git, .env, __pycache__, venv etc.
+# Those bloat the image and — critically — .env leaks your API keys into the image layers.
+
+# Python cache — not needed in container
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Environment files — NEVER copy secrets into image
+# Your API keys and DB password live here. Keep them out.
+.env
+.env.*
+
+# Git history — not needed (saves ~10MB)
+.git/
+.gitignore
+
+# Local virtual environment — container has its own Python env
+venv/
+.venv/
+env/
+
+# IDE files
+.vscode/
+.idea/
+
+# Docker files themselves — no need to include the recipe inside the box
+docker-compose.yml
+docker-compose.yaml
+Dockerfile*
+
+# Test files — not needed in production image
+tests/
+
+# Jupyter notebooks and scratch files
+*.ipynb
+notes.txt

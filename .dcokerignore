@@ -1,0 +1,31 @@
+# .dockerignore — put this in the same folder as Dockerfile
+
+# Python cache — not needed in container
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Environment files — NEVER copy secrets into image
+.env
+.env.*
+
+# Git history — not needed
+.git/
+.gitignore
+
+# Local virtual environment — container has its own
+venv/
+.venv/
+env/
+
+# IDE files
+.vscode/
+.idea/
+
+# Docker files themselves
+docker-compose.yml
+Dockerfile*
+
+# Test files — not needed in production image
+tests/
