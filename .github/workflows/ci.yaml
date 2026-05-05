@@ -38,17 +38,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip          # where pip stores downloads
-          key: pip-${{ hashFiles('app/requirements.txt') }}
-          # key = fingerprint of requirements.txt
-          # If requirements.txt changes → key changes → cache invalidated → fresh install
-          # If requirements.txt unchanged → same key → reuse cache
+          key: pip-${{ hashFiles('requirements.txt') }}
+          # requirements.txt is at the ROOT of the project, not inside app/
+          # hashFiles() takes the path relative to the repo root
           restore-keys: |
             pip-
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r app/requirements.txt
+          pip install -r requirements.txt
           pip install flake8 pytest    # add linting and test tools
 
       # ── LINT — catches syntax errors and style issues ────────────────────
@@ -121,9 +120,13 @@ jobs:
             -t ${{ secrets.DOCKER_USERNAME }}/travel-api:latest \
             -t ${{ secrets.DOCKER_USERNAME }}/travel-api:${{ steps.set-tag.outputs.tag }} \
             -f app/Dockerfile \
-            ./app
-          # -f app/Dockerfile = Dockerfile location
-          # ./app = build context (COPY commands resolve from here)
+            .
+          # -f app/Dockerfile = path to the Dockerfile (relative to repo root)
+          # .  = build context is the REPO ROOT — required because app/Dockerfile does:
+          #      COPY requirements.txt .  → needs requirements.txt at root
+          #      COPY app/ .             → needs the app/ folder at root
+          # If you used ./app as context, Docker would look for requirements.txt
+          # INSIDE ./app/ — it's not there, so it fails.
 
       - name: Push FastAPI image
         run: |
@@ -136,8 +139,14 @@ jobs:
           docker build \
             -t ${{ secrets.DOCKER_USERNAME }}/travel-streamlit:latest \
             -t ${{ secrets.DOCKER_USERNAME }}/travel-streamlit:${{ steps.set-tag.outputs.tag }} \
-            -f frontend/Dockerfile \
-            ./frontend
+            -f frontend/Dockerfile.streamlit \
+            .
+          # -f frontend/Dockerfile.streamlit  ← actual filename (not Dockerfile)
+          # .  = repo root context — required because Dockerfile.streamlit does:
+          #      COPY frontend/requirements-streamlit.txt .
+          #      COPY frontend/ .
+          # Both those COPY lines expect the root as context so they can
+          # find the frontend/ folder. ./frontend context would fail.
 
       - name: Push Streamlit image
         run: |
