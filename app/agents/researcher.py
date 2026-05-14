@@ -21,21 +21,26 @@
 
 import os
 from dotenv import load_dotenv
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_tavily import TavilySearch          # updated: was TavilySearchResults from langchain_community
+                                                   # langchain_community version deprecated in LangChain 0.3.25
+                                                   # new package: pip install langchain-tavily
 from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage, SystemMessage
 from agents.model import model
 from agents.schemas import PlannerState
 from db.database import load_chat_history
+from logger import get_logger
 
 load_dotenv()
+
+logger = get_logger(__name__)
 
 # ── The Tavily tool ──────────────────────────────────────────────────────────
 # max_results=5 → top 5 web results per search query
 # The LLM can call this tool MULTIPLE TIMES per researcher_agent invocation
 # e.g. once for "best hotels Paris 2025", once for "Paris attractions itinerary"
 
-tavily_tool = TavilySearchResults(max_results = 5)
+tavily_tool = TavilySearch(max_results=5)          # TavilySearch replaces TavilySearchResults
 
 def researcher_agent(state: PlannerState) -> dict:
     """
@@ -101,7 +106,7 @@ def researcher_agent(state: PlannerState) -> dict:
     react_agent = create_react_agent(
         model = model,
         tools = [tavily_tool],
-        state_modifier = system
+        prompt = system          # LangGraph 1.x renamed state_modifier → prompt
     )
     # Invoke the ReAct agent — this runs the FULL loop until LLM stops calling tools
     result = react_agent.invoke({
@@ -111,9 +116,11 @@ def researcher_agent(state: PlannerState) -> dict:
     # (no tool call = it's done researching)
     research_findings = result["messages"][-1].content
 
-    print(f"[Researcher] Found {len(result['messages'])} messages in ReAct loop")
-    print(f"[Researcher] Findings preview: {research_findings[:200]}...")
-
+    logger.info(
+        "ReAct loop complete | messages=%d | findings_len=%d",
+        len(result["messages"]), len(research_findings)
+    )
+    logger.debug("Findings preview: %s", research_findings[:200])
 
     return {
         "research_findings": research_findings,

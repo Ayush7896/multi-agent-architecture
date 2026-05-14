@@ -23,10 +23,20 @@ services:
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_NAME: travel_planner
-      DB_USER: postgres        # was missing — os.getenv('DB_USER') returned None → "None" in DB_URI
+      DB_USER: postgres
       DB_PASSWORD: ${DB_PASSWORD}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       TAVILY_API_KEY: ${TAVILY_API_KEY}
+      # ── LangSmith observability ──────────────────────────────────────────
+      # WHY LANGSMITH_ prefix here?
+      #   LangSmith SDK reads LANGSMITH_API_KEY, LANGSMITH_TRACING, LANGSMITH_PROJECT
+      #   The older LANGCHAIN_* names still work but are deprecated.
+      #   Your .env uses LANGSMITH_ — so we match that exactly.
+      #   docker-compose passes these through: ${VAR} = read from your .env file.
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}               # empty string = tracing disabled
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}          # "true" = enable tracing
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-travel-planner} # project name in LangSmith UI
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
     depends_on:
       postgres:
         condition: service_healthy

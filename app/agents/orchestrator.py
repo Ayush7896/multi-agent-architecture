@@ -9,9 +9,13 @@ from agents.planner import planner_agent
 from dotenv import load_dotenv
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg_pool import AsyncConnectionPool
-
+from logger import get_logger
 
 load_dotenv()
+
+# Logger name = "agents.orchestrator" — matches the module file path
+# In logs you'll see: agents.orchestrat | INFO | Routing to researcher
+logger = get_logger(__name__)
 
 # Phase 2 (Memory) + Phase 3 (Checkpointer)
 # Phase 2 changes:
@@ -89,21 +93,28 @@ def orchestrator_agent(state: PlannerState):
    
 
     structured_model = model.with_structured_output(OrchestratorOutput)
- 
+
+    logger.info("Orchestrator invoked | chat_id=%s | input=%s", state["chat_id"], state["user_input"][:80])
+
     # adding retries logic
     for attempt in range(3):
         try:
             response = structured_model.invoke(messages)
-            if response.next_agent not in ["planner","end"]:
-                raise ValueError("Invalid agent")
+            if response.next_agent not in ["researcher", "planner", "end"]:
+                raise ValueError(f"Invalid next_agent value: {response.next_agent!r}")
+            logger.info(
+                "Routing → %s | thought=%s | plan_items=%d",
+                response.next_agent, response.thought[:80], len(response.plan)
+            )
             return {
-            "current_thought": response.thought,
-            "plan": response.plan,
-            "next_agent": response.next_agent
+                "current_thought": response.thought,
+                "plan": response.plan,
+                "next_agent": response.next_agent
             }
         except Exception as e:
-            print(f"Retry {attempt + 1} failed:",e)
+            logger.warning("Orchestrator retry %d/3 failed: %s", attempt + 1, str(e))
 
+    logger.error("Orchestrator failed after 3 retries | chat_id=%s", state["chat_id"])
     return {
         "next_agent": "end",
         "final_answer": "Failed after retries"
@@ -183,7 +194,7 @@ async def create_workflow():
     await checkpointer.setup()  # langgraph creates its own tables here
 
     workflow = graph.compile(checkpointer=checkpointer)
-    print("[LangGraph] Checkpointer ready — LangGraph tables created/verified")
+    logger.info("LangGraph workflow compiled — checkpointer ready (tables created/verified)")
     return workflow
 
 

@@ -1,16 +1,48 @@
 # .github/workflows/deploy.yaml
-# PURPOSE: Deploy to Railway after CI passes
-# RUNS ON: only when "Build and Push Docker Image" workflow completes successfully
-# WHY separate file? Separation of concerns.
-#   ci.yaml = validate and package the code
-#   deploy.yaml = ship the package to production
+#
+# PURPOSE: Deploy to Azure Container Apps after CI passes.
+#
+# WHAT IS AZURE CONTAINER APPS?
+#   A managed serverless container platform (like Railway but enterprise-grade).
+#   You push a Docker image → Azure pulls it and runs it.
+#   Auto-scaling, built-in HTTPS, no VM management needed.
+#
+# WHY SEPARATE FROM ci.yaml?
+#   ci.yaml = validate + package (runs on every PR and push)
+#   deploy.yaml = ship to production (runs only after ci.yaml succeeds on main)
+#   Separation means: a failed PR test never touches production.
+#
+# TRIGGER: workflow_run
+#   This file only runs when the "Build and Push Docker Image" workflow
+#   completes successfully on the main branch.
+#   It does NOT run on direct pushes — it's downstream of CI.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SETUP CHECKLIST (do this once before this workflow can run):
+#
+#   1. Create Azure Container Apps environment:
+#      az containerapp env create --name travel-planner-env \
+#        --resource-group travel-planner-rg --location eastus
+#
+#   2. Create the two container apps (FastAPI + Streamlit):
+#      az containerapp create --name travel-api ...
+#      az containerapp create --name travel-streamlit ...
+#
+#   3. Add these GitHub Secrets (Settings → Secrets → Actions):
+#      AZURE_CLIENT_ID      — from Azure service principal
+#      AZURE_TENANT_ID      — your Azure tenant
+#      AZURE_SUBSCRIPTION_ID — your Azure subscription
+#      DOCKERHUB_USERNAME   — Docker Hub username (already set for CI)
+#
+#   Full Azure setup guide: https://learn.microsoft.com/azure/container-apps/
+# ─────────────────────────────────────────────────────────────────────────────
 
-name: Deploy to Railway
+name: Deploy to Azure Container Apps
 
 on:
   workflow_run:
     workflows: ["Build and Push Docker Image"]
-    # ^ MUST match the exact name: field in ci.yaml
+    # ^ MUST match the exact `name:` field in ci.yaml
     types: [completed]
     branches: [main]
 
@@ -19,40 +51,74 @@ jobs:
     runs-on: ubuntu-latest
 
     # Only deploy if ci.yaml actually PASSED
-    # workflow_run fires even on failure — this check prevents deploying broken code
+    # workflow_run fires even on failure — this guard prevents deploying broken code
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
 
+    # WHY these permissions?
+    #   id-token: write  → lets Azure verify this is a real GitHub Actions run (OIDC auth)
+    #   contents: read   → lets checkout action clone the repo
+    permissions:
+      id-token: write
+      contents: read
+
     steps:
+      # ── Step 1: What are we deploying? ──────────────────────────────────────
+      - name: Confirm deployment info
+        run: |
+          echo "CI workflow status : ${{ github.event.workflow_run.conclusion }}"
+          echo "Triggered by commit: ${{ github.event.workflow_run.head_sha }}"
+          echo "Branch             : ${{ github.event.workflow_run.head_branch }}"
+
+      # ── Step 2: Checkout (needed to read any local config files) ────────────
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Confirm what we are deploying
-        run: |
-          echo "CI workflow status: ${{ github.event.workflow_run.conclusion }}"
-          echo "Triggered by commit: ${{ github.event.workflow_run.head_sha }}"
-          echo "Branch: ${{ github.event.workflow_run.head_branch }}"
-          # These echo statements appear in your GitHub Actions logs
-          # Useful for debugging which commit triggered this deploy
+      # ── Step 3: Login to Azure via OIDC (no password stored) ────────────────
+      # WHY OIDC instead of a password/secret?
+      #   OIDC = OpenID Connect. Azure trusts GitHub's identity token directly.
+      #   You don't need to store AZURE_CLIENT_SECRET in GitHub Secrets.
+      #   Tokens are short-lived (15 min) and auto-rotated. More secure.
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-        # npm is pre-installed on GitHub's Ubuntu runner
-        # This installs the railway command globally
+      # ── Step 4: Deploy FastAPI image to Azure Container Apps ────────────────
+      # WHAT THIS DOES:
+      #   Tells Azure: "replace the running container with this new Docker image"
+      #   Azure pulls the image from Docker Hub, spins up new container, routes traffic.
+      #   Zero-downtime: Azure keeps old container alive until new one is healthy.
+      - name: Deploy FastAPI to Azure Container Apps
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          appSourcePath: ${{ github.workspace }}
+          acrName: ""                                             # empty = using Docker Hub not ACR
+          containerAppName: travel-api                           # name you gave the container app
+          resourceGroup: travel-planner-rg                       # your Azure resource group
+          imageToDeploy: ${{ secrets.DOCKERHUB_USERNAME }}/travel-planner-api:latest
 
-      - name: Deploy FastAPI to Railway
-        run: railway redeploy --service travel-api --yes
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          # --yes = skip confirmation prompt (needed for non-interactive CI)
-          # railway CLI reads RAILWAY_TOKEN automatically from env
+      # ── Step 5: Deploy Streamlit image to Azure Container Apps ──────────────
+      - name: Deploy Streamlit to Azure Container Apps
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          appSourcePath: ${{ github.workspace }}
+          acrName: ""
+          containerAppName: travel-streamlit
+          resourceGroup: travel-planner-rg
+          imageToDeploy: ${{ secrets.DOCKERHUB_USERNAME }}/travel-planner-streamlit:latest
 
-      - name: Deploy Streamlit to Railway
-        run: railway redeploy --service travel-streamlit --yes
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-
+      # ── Step 6: Print URLs ───────────────────────────────────────────────────
+      # Azure auto-assigns a URL like: https://travel-api.{random}.eastus.azurecontainerapps.io
+      # You can get the exact URL with: az containerapp show --name travel-api ...
       - name: Deployment summary
         run: |
           echo "✅ Deployment complete"
-          echo "FastAPI: https://travel-api.railway.app"
-          echo "Streamlit: https://travel-streamlit.railway.app"
+          echo "Check your Azure Portal for live URLs:"
+          echo "  https://portal.azure.com → Container Apps → travel-api"
+          echo "  https://portal.azure.com → Container Apps → travel-streamlit"
+          echo ""
+          echo "Or run: az containerapp show --name travel-api \\"
+          echo "              --resource-group travel-planner-rg \\"
+          echo "              --query properties.configuration.ingress.fqdn"
