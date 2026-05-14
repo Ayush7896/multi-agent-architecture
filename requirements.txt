@@ -9,7 +9,7 @@ langchain==1.2.17
 langchain-core==1.3.2
 langchain-openai==1.2.1
 langchain-community==0.4.1
-langchain-tavily==0.1.9      # replaces deprecated TavilySearchResults from langchain_community
+langchain-tavily==0.2.18      # replaces deprecated TavilySearchResults from langchain_community
 
 langgraph==1.1.10
 langgraph-checkpoint-postgres==3.0.2
